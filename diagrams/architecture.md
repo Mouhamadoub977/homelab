@@ -1,4 +1,3 @@
-
 # Homelab Architecture
 
 ## Current architecture — Phase 1
@@ -7,13 +6,22 @@
 flowchart TD
     Internet["Internet"]
     Router["Home Router / DHCP"]
-    Mac["MacBook Air - SSH Client"]
-    Server["homelab-01 - Ubuntu Server"]
+    Mac["MacBook Air<br/>SSH Client + Tailscale"]
+    Server["GMKtec M8<br/>homelab-01<br/>Ubuntu Server"]
+    Tailnet["Tailscale Private Network"]
 
     Internet --- Router
-    Router ---|"Wi-Fi"| Mac
     Router ---|"Ethernet / enp2s0"| Server
-    Mac -.->|"SSH / TCP 22 over LAN"| Server
+    Router ---|"Wi-Fi / LAN"| Mac
+
+    Mac -.->|"Private VPN connection"| Tailnet
+    Tailnet -.->|"SSH / TCP 22"| Server
+
+    classDef device fill:#e8f1ff,stroke:#2563eb,color:#1e3a8a
+    classDef vpn fill:#dcfce7,stroke:#16a34a,color:#166534
+
+    class Mac,Server device
+    class Tailnet vpn
 ```
 
 ## Infrastructure inventory
@@ -21,29 +29,36 @@ flowchart TD
 | Component | Role | Status |
 |---|---|---|
 | MacBook Air | Administration workstation | Active |
+| GMKtec M8 | Physical Ubuntu Server host | Active |
 | Home router | LAN connectivity and DHCP | Active |
-| GMKtec | Ubuntu Server node | Active |
-| OpenSSH | Remote administration | Working |
-| VPN | Secure external access | Planned |
+| OpenSSH | Secure remote administration | Active |
+| Tailscale | Private remote connectivity | Active |
+| Ansible | Configuration management | Planned |
 | Docker / Kubernetes | Container infrastructure | Planned |
+| Prometheus / Grafana | Monitoring and observability | Planned |
 
 ## Network information
 
 - Hostname: `homelab-01`
 - Active interface: `enp2s0`
-- Current LAN address: `192.168.1.12/24`
+- LAN address observed: `192.168.1.12/24`
 - Address assignment: DHCP
+- Tailscale address observed: `100.80.166.89`
 - Remote administration: SSH on TCP port 22
 
 ## Architecture decisions
 
 1. Use dedicated physical hardware for server workloads.
 2. Administer the server remotely from macOS.
-3. Keep SSH access within the local network initially.
-4. Introduce SSH keys and firewall hardening before remote access.
-5. Introduce infrastructure automation incrementally.
+3. Use SSH public-key authentication with a dedicated Ed25519 key.
+4. Disable SSH password authentication and direct root login.
+5. Use Tailscale for private remote connectivity.
+6. Introduce infrastructure automation incrementally.
 
 ## Future evolution
 
-The architecture will evolve toward container orchestration,
-infrastructure automation, monitoring and a self-hosted data platform.
+The infrastructure will evolve toward automated provisioning,
+container orchestration, observability and a self-hosted data platform.
+
+The current deployment consists of one physical server.
+High availability and distributed workloads are not yet implemented.
