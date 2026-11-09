@@ -1,214 +1,156 @@
-# 01 — Ubuntu Server Installation
+# Host Provisioning & Storage Baseline
 
-## Objective
+## Scope
 
-Install Ubuntu Server on a physical GMKtec mini-PC to establish the first node of a personal infrastructure and data engineering homelab.
+This document records the initial provisioning of `homelab-01`, a physical GMKtec M8 host running Ubuntu Server 26.04.1 LTS. It captures the hardware baseline, installation decisions, storage layout and post-installation checks.
 
-The node will initially be administered remotely using SSH and will later support automation, container orchestration and distributed workloads.
+The host is the first and currently only compute node. High availability, automated rebuilds and disaster recovery are not yet implemented.
 
-## 1. Hardware inventory
+## 1. Hardware baseline
 
-| Component | Configuration |
+| Component | Recorded configuration |
 |---|---|
-| Device | GMKtec M8 mini-PC |
+| Platform | GMKtec M8 mini-PC |
 | Processor | AMD Ryzen 5 PRO 6650H |
-| CPU | 6 cores / 12 threads |
+| CPU topology | 6 cores / 12 threads |
 | Memory | 16 GB LPDDR5-6400 |
-| Storage | 512 GB NVMe SSD |
-| Networking | 2 × Realtek 2.5 GbE |
+| Primary storage | 512 GB NVMe SSD |
+| Wired networking | 2 × Realtek 2.5 GbE |
 | Wireless | MediaTek MT7922 |
-| Virtualization | AMD hardware virtualization enabled |
 | Graphics | Integrated AMD Radeon GPU |
+| Virtualization | AMD hardware virtualization enabled during setup |
 
-The installed memory is likely soldered and should not be assumed to be upgradeable.
+The original inventory describes memory as *likely* soldered; upgradeability has not been independently established. Hardware values should be reconfirmed against system inventory commands before they are used as sizing guarantees.
 
-## 2. Prepare the installation USB
+Recommended inventory capture:
 
-The mini-PC was initially running Windows 11.
+```bash
+lscpu
+free -h
+lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS
+ip -br link
+sudo dmidecode -t system -t memory
+```
 
-Required tools:
+## 2. Installation method
 
-- Ubuntu Server 26.04.1 LTS AMD64 ISO
-- Rufus for Windows
-- 8 GB USB flash drive
+The system was migrated from its original Windows 11 installation to Ubuntu Server using an Ubuntu Server 26.04.1 LTS AMD64 installation image written to a USB drive with Rufus.
 
-Procedure:
+- Boot mode: UEFI.
+- Firmware boot menu: `F7` on the GMKtec.
+- Installation profile: standard Ubuntu Server, not minimized.
+- Locale: English; keyboard: French.
+- Package source: official Ubuntu mirror; no proxy configured.
+- Ubuntu Pro: skipped.
+- OpenSSH Server: selected during installation.
+- Additional featured snaps: none selected.
 
-1. Download the Ubuntu Server AMD64 ISO from the official Ubuntu website.
-2. Download Rufus from its official website.
-3. Insert the USB flash drive.
-4. Open Rufus and select the correct USB device.
-5. Select the Ubuntu Server ISO.
-6. Use the compatible boot settings detected by Rufus.
-7. Write the ISO to the USB device.
-8. Wait until Rufus displays `READY`.
+The installer booted from the USB device and targeted the internal NVMe SSD. The installation replaced the previous Windows system.
 
-**Warning:** Writing the ISO destroys existing data on the selected USB device.
+**Provisioning constraint:** this was an interactive installation, not an unattended or reproducible image-based deployment. Automated provisioning is a future milestone.
 
-## 3. Boot from USB
+## 3. Storage design
 
-1. Keep the installation USB connected.
-2. Restart the GMKtec.
-3. Repeatedly press `F7` during startup to open the firmware boot menu.
-4. Select the UEFI USB entry.
-5. Start the Ubuntu Server installer.
+Guided partitioning with LVM was selected. The recorded approximate layout is:
 
-The boot menu also displayed the internal Windows Boot Manager, confirming that the installer USB and internal SSD were separate boot devices.
-
-## 4. Installer configuration
-
-Selected options:
-
-| Setting | Choice |
-|---|---|
-| Language | English |
-| Keyboard layout | French |
-| Installation type | Ubuntu Server |
-| Minimized installation | Disabled |
-| Proxy | None |
-| Package mirror | Official Ubuntu mirror |
-| Ubuntu Pro | Skipped |
-| OpenSSH server | Installed |
-| SSH password authentication | Enabled temporarily |
-| Featured snaps | None |
-
-The standard Ubuntu Server installation was selected to provide a convenient foundation for learning Linux administration.
-
-## 5. Network configuration
-
-The installer detected two Realtek Ethernet interfaces and a MediaTek Wi-Fi interface.
-
-Initially, the network interfaces were not connected.
-
-A Cat 6 Ethernet cable was connected between a LAN port on the home router and the GMKtec.
-
-The active Ethernet interface was configured using automatic IPv4 addressing (DHCP).
-
-The router assigned an address in the `192.168.1.0/24` network.
-
-The Ubuntu package mirror connectivity test succeeded, confirming access to the package repositories.
-
-## 6. Storage configuration
-
-The internal 512 GB NVMe SSD was selected for installation.
-
-Guided partitioning with LVM was enabled.
-
-Approximate layout:
-
-| Mount point / volume | Size | Purpose |
+| Partition / logical volume | Approximate size | Function |
 |---|---:|---|
 | `/boot/efi` | 1 GB | UEFI boot files |
-| `/boot` | 2 GB | Linux kernel and boot files |
+| `/boot` | 2 GB | Kernel and boot artifacts |
 | `/` | 100 GB | Root filesystem |
-| LVM free extents | 374 GB | Available for future allocation |
+| Unallocated extents within `ubuntu-vg` | 374 GB | Capacity reserved for future logical volumes |
 
-The LVM volume group was named `ubuntu-vg`.
+The volume group is named `ubuntu-vg`.
 
-This layout preserves capacity for future logical volumes dedicated to application data, containers or other workloads.
+### Design rationale
 
-**Important:** The installation erased the previous Windows installation on the selected internal SSD.
+Keeping the initial root filesystem smaller than the physical SSD leaves room for later separation of container data, database storage and other workloads into dedicated logical volumes. LVM enables flexible logical-volume allocation and resizing, subject to filesystem and available-capacity constraints.
 
-## 7. Host identity
+**Current limit:** the available extents are not yet assigned to application volumes. The table is an installation-time approximation; a fresh `lsblk`, `pvs`, `vgs` and `lvs` capture is needed before defining the final storage plan.
 
-The system was configured with:
-
-- Hostname: `homelab-01`
-- Local administrator: `mouhamadou`
-
-The administrator password is not stored in this repository.
-
-## 8. SSH installation
-
-OpenSSH Server was enabled during installation.
-
-Password authentication was temporarily permitted for initial remote access.
-
-SSH key-based authentication and further hardening are planned for the next infrastructure milestone.
-
-## 9. First boot
-
-After installation:
-
-1. Restart the machine.
-2. Remove the installation USB when prompted.
-3. Boot Ubuntu from the internal NVMe SSD.
-4. Log in using the local administrator account.
-5. Verify the network interfaces.
-
-Commands:
+Validation commands:
 
 ```bash
-hostname
-whoami
-ip -br addr
+lsblk -f
+df -hT
+sudo pvs
+sudo vgs
+sudo lvs -a -o +devices
 ```
 
-Expected hostname:
+LVM is a volume-management mechanism, not a substitute for backups or recovery testing.
 
-```text
-homelab-01
-```
+## 4. Network and host identity
 
-Expected user:
+During installation, the host was connected to the home router through a Cat 6 Ethernet cable. DHCP was used for IPv4 configuration, and the Ubuntu package mirror was reachable.
 
-```text
-mouhamadou
-```
+| Setting | Recorded value |
+|---|---|
+| Hostname | `homelab-01` |
+| Administrative account | `mouhamadou` |
+| Active Ethernet interface | `enp2s0` |
+| Observed LAN IPv4 | `192.168.1.12` |
+| Address assignment | DHCP |
 
-The active Ethernet interface is `enp2s0`.
+The LAN address is observational, not a verified permanent reservation. Network interface inventory, Netplan behavior and the subsequent remote access deployment are documented separately in [Network Architecture & Connectivity](02-networking.md).
 
-## 10. Initial remote administration
+## 5. Initial access and subsequent hardening
 
-From the macOS Terminal:
+OpenSSH Server was installed during provisioning. Password-based SSH access was temporarily enabled for initial administration.
+
+After successful public-key authentication was established, the server was hardened using a dedicated OpenSSH drop-in. The validated baseline now includes:
+
+- Ed25519 public-key login from macOS.
+- Password and keyboard-interactive SSH authentication disabled.
+- Direct root SSH login disabled.
+- Private remote administration through Tailscale.
+
+These controls were applied **after** the original OS installation and should not be mistaken for installer defaults. Implementation and validation are documented in [SSH Administration & Access Hardening](03-ssh.md).
+
+## 6. Post-installation validation
+
+The initial boot completed successfully from the internal NVMe SSD after removal of the installation media. The host was reachable over Ethernet and could be administered remotely.
+
+Observed checks across subsequent provisioning work:
+
+| Area | Validation | Result |
+|---|---|---|
+| Host identity | `hostname`, `whoami` | Expected host and administrator |
+| Network | `ip -br addr` | Active Ethernet and assigned IPv4 |
+| Package access | Installer mirror connectivity test | Successful |
+| SSH | Remote interactive login | Successful |
+| System packages | OS updates applied | Completed during baseline work |
+| Boot / network readiness | Reboot and `systemctl --failed` | No failed units after Netplan remediation |
+| Remote administration | SSH through Tailscale from an external network | Successful |
+
+A later login banner reported Ubuntu Server 26.04.1 LTS and kernel `7.0.0-43-generic`. It also reported three devices with available firmware upgrades. The firmware update status has not been investigated or remediated in this documentation.
+
+For a fresh verification snapshot:
 
 ```bash
-ssh mouhamadou@<SERVER_LAN_IP>
+hostnamectl
+uname -r
+uptime
+systemctl --failed
+sudo apt update
+apt list --upgradable
+sudo fwupdmgr get-upgrades
 ```
 
-On the first connection, verify and accept the server's SSH host key fingerprint.
+The last two commands inspect available updates; they do not install them.
 
-Authenticate using the Ubuntu administrator password.
+## 7. Operational gaps and next milestones
 
-The remote shell prompt should resemble:
+- Capture and version a sanitized hardware/storage inventory.
+- Define logical-volume allocation and filesystem strategy for data services.
+- Document backup scope, recovery objectives and a tested restore procedure.
+- Assess available firmware upgrades before scheduling maintenance.
+- Review firewall and network exposure.
+- Automate baseline configuration with Ansible.
+- Define a reproducible provisioning or rebuild process.
 
-```text
-mouhamadou@homelab-01:~$
-```
+## Related documentation
 
-This confirms that the server can be administered remotely from the workstation.
-
-## 11. Validation checklist
-
-- [x] Physical hardware detected
-- [x] Ubuntu Server installed
-- [x] UEFI boot successful
-- [x] LVM storage configured
-- [x] Ethernet connection established
-- [x] DHCP address assigned
-- [x] Ubuntu package mirror reachable
-- [x] OpenSSH installed
-- [x] Local login successful
-- [x] Remote SSH login successful
-- [ ] Operating system updated
-- [ ] SSH key authentication configured
-- [ ] Firewall configured
-- [ ] Stable LAN address configured
-
-## 12. Lessons learned
-
-This installation introduced several infrastructure concepts:
-
-- UEFI boot management
-- Bootable installation media
-- Linux network interface naming
-- Ethernet link establishment
-- DHCP addressing
-- Package repositories
-- LVM storage management
-- SSH remote administration
-- Local versus remote shell execution
-
-## Next steps
-
-Continue with system updates, SSH key authentication, network configuration, basic firewall rules and server hardening.
+- [Network Architecture & Connectivity](02-networking.md)
+- [SSH Administration & Access Hardening](03-ssh.md)
+- [Infrastructure Architecture](../diagrams/architecture.md)
