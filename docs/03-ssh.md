@@ -61,6 +61,33 @@ systemctl is-active ssh
 
 The syntax check succeeded, the service was active, and effective settings were inspected to confirm the intended authentication policy.
 
+### SSH socket activation and listening addresses
+
+The SSH listening configuration was inspected on 2026-11-10.
+
+Ubuntu uses systemd socket activation for SSH on this host. The `ssh.socket` unit is enabled and defines the following listening endpoints:
+
+```ini
+ListenStream=0.0.0.0:22
+ListenStream=[::]:22
+BindIPv6Only=ipv6-only
+```
+
+The effective OpenSSH configuration was independently checked with `sudo sshd -T`. It confirmed listening on all IPv4 and IPv6 addresses, with public-key authentication enabled, password authentication disabled, keyboard-interactive authentication disabled, and direct root login disabled.
+
+Commands used during validation:
+
+```bash
+systemctl is-enabled ssh.socket
+systemctl cat ssh.socket
+sudo sshd -T
+sudo ss -tulpen
+```
+
+Because systemd manages the listening sockets, changes to SSH listening addresses must account for `ssh.socket` as well as `sshd_config`.
+
+Listening on all interfaces does not prove public Internet reachability. The host firewall, router configuration and upstream network filtering must be considered separately.
+
 **Change safety:** retain an existing working session and confirm a new public-key login before disabling password-based access or reloading SSH. An out-of-band recovery path should be available for future policy changes.
 
 ## 3. Client identity and configuration
@@ -157,13 +184,16 @@ An early LAN SSH attempt terminated with `Broken pipe`. The subsequent attempt s
 | Remote VPN path | SSH via Tailscale from external network | Successful |
 | Client agent | `ssh-add -l` | Dedicated Ed25519 identity loaded |
 
+| SSH socket activation | `systemctl is-enabled ssh.socket` | Enabled |
+| SSH socket configuration | `systemctl cat ssh.socket` | IPv4 and IPv6 port 22 listeners confirmed |
+| Listening sockets | `sudo ss -tulpen` | SSH listening on all IPv4 and IPv6 interfaces |
 ## 7. Security boundaries and outstanding work
 
 The implemented controls restrict SSH authentication, but do not establish comprehensive host security.
 
 Remaining work includes:
 
-- Audit firewall rules and listening services across LAN and Tailscale interfaces.
+- Design and validate an explicit inbound firewall policy for SSH, preserving Tailscale access and a trusted LAN recovery path. The 2026-11-10 audit found UFW inactive, Tailscale-managed nftables rules, and no general default-deny inbound policy.
 - Review Tailscale device authorization and access policies.
 - Establish a documented administrative recovery procedure.
 - Evaluate SSH access logging and alerting.

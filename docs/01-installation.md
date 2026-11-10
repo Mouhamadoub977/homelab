@@ -20,7 +20,7 @@ The host is the first and currently only compute node. High availability, automa
 | Graphics | Integrated AMD Radeon GPU |
 | Virtualization | AMD hardware virtualization enabled during setup |
 
-The original inventory describes memory as *likely* soldered; upgradeability has not been independently established. Hardware values should be reconfirmed against system inventory commands before they are used as sizing guarantees.
+Firmware inventory reports four 4 GB LPDDR5-6400 memory devices (16 GB total). Ubuntu currently exposes approximately 11.9 GiB of usable RAM. The AMD Radeon 680M driver reports 3072 MiB of VRAM, consistent with a substantial integrated GPU memory reservation. Additional firmware and kernel reservations may apply. Hardware values should be reconfirmed before they are used as sizing guarantees.
 
 Recommended inventory capture:
 
@@ -66,7 +66,7 @@ The volume group is named `ubuntu-vg`.
 
 Keeping the initial root filesystem smaller than the physical SSD leaves room for later separation of container data, database storage and other workloads into dedicated logical volumes. LVM enables flexible logical-volume allocation and resizing, subject to filesystem and available-capacity constraints.
 
-**Current limit:** the available extents are not yet assigned to application volumes. The table is an installation-time approximation; a fresh `lsblk`, `pvs`, `vgs` and `lvs` capture is needed before defining the final storage plan.
+**Current limit:** the available extents are not yet assigned to application volumes. The storage layout was verified on 2026-11-10 using `lsblk`, `df`, `pvs`, `vgs` and `lvs`: the NVMe disk reports 476.9 GiB, the `ubuntu-vg` volume group approximately 473.89 GiB, the root logical volume 100 GiB, and approximately 373.89 GiB of unallocated LVM extents. A fresh inventory is required before allocating storage to application workloads.
 
 Validation commands:
 

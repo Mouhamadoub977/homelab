@@ -47,7 +47,7 @@ networkctl list
 sudo netplan get
 ```
 
-The server was installed with DHCP on the wired interface. A router-side DHCP reservation has **not** been verified. Default gateway and DNS resolver details should be captured separately from the live host rather than inferred from the subnet.
+The server uses DHCP on `enp2s0`, with an observed LAN address of `192.168.1.12/24` and default gateway `192.168.1.254`. Netplan also configures DHCP on the disconnected `eno1` interface, marked `optional: true`. DNS inspection on 2026-11-10 confirmed the home router (`192.168.1.254`) and an IPv6 resolver on `enp2s0`, while `tailscale0` uses Tailscale DNS (`100.100.100.100` and its IPv6 counterpart) for tailnet-specific resolution. A router-side DHCP reservation has not been verified.
 
 ## 3. Incident: network readiness unit failed at boot
 
@@ -109,6 +109,36 @@ The alias resolves to the Tailscale address and selects the dedicated client ide
 
 Tailscale connectivity alone does not establish a complete firewall policy or a review of tailnet ACL/grants. Those remain separate tasks.
 
+### Tailscale policy routing and peer connectivity
+
+Tailscale uses Linux policy routing in addition to the main routing table. During validation, `ip rule show` included a rule selecting routing table `52`, and `ip route show table 52` included a route to the macOS peer (`100.104.23.26`) through `tailscale0`.
+
+The following commands inspect the overlay routing configuration:
+
+```bash
+ip rule show
+ip route show table 52
+tailscale status
+tailscale ping 100.104.23.26
+```
+
+A direct peer-to-peer WireGuard connection was observed during testing. This is a point-in-time result, not a guarantee that future connections will remain direct. Tailscale may fall back to DERP relays when direct connectivity is unavailable.
+
+The Tailscale coordination service supports identity and peer discovery; it is not the normal data path for SSH traffic.
+### Firewall and SSH exposure baseline
+
+The firewall and SSH listening configuration were inspected on 2026-11-10.
+
+- UFW was inactive.
+- Tailscale-managed IPv4 and IPv6 filtering rules were present through the `iptables-nft` compatibility layer.
+- The inspected INPUT chains used an `accept` policy; no general default-deny inbound firewall policy was configured.
+- OpenSSH listened on `0.0.0.0:22` and `[::]:22`.
+- SSH socket activation was enabled through `ssh.socket`.
+- Effective SSH settings confirmed public-key authentication enabled, password and keyboard-interactive authentication disabled, and direct root login disabled.
+
+Listening on all interfaces does not establish public Internet reachability. Router port forwarding, upstream filtering and IPv6 exposure require separate verification.
+
+**Pending hardening:** design and test an explicit inbound firewall policy that preserves Tailscale administration and a trusted LAN recovery path. No firewall changes were applied during this audit.
 ## 5. Operational diagnostics
 
 | Check | Command | Purpose |
@@ -124,21 +154,25 @@ Tailscale connectivity alone does not establish a complete firewall policy or a 
 | SSH effective policy | `sudo sshd -T` | Verify server authentication settings |
 
 For changes affecting the only remote access path, retain a recoverable session or local console access and validate the configuration before rebooting.
-
 ## 6. Validated outcomes and open work
-
 **Validated**
+
 - Wired LAN connectivity and DHCP assignment on `enp2s0`.
+- Interface inventory and merged Netplan configuration, including `eno1` marked `optional: true`.
+- Default IPv4 route through `192.168.1.254` and DNS configuration on `enp2s0` and `tailscale0`.
 - Initial package mirror connectivity.
 - Local SSH access.
 - Resolution of the network readiness failure after Netplan adjustment and reboot.
 - Active Tailscale service and remote SSH login from outside the home LAN.
+- Tailscale policy routing through Linux table `52`.
 - SSH key-based login and rejection of password-only authentication.
+- Inspection of UFW status, nftables rules, listening sockets and systemd SSH socket activation.
 
 **Pending verification or implementation**
-- Capture the complete interface mapping and canonical Netplan configuration.
-- Verify default route, DNS servers and router DHCP lease/reservation.
-- Review firewall rules and exposed listening services on LAN and VPN interfaces.
+
+- Verify router-side DHCP reservation and lease persistence.
+- Verify router port forwarding, upstream filtering and public IPv6 exposure.
+- Design and test an explicit inbound firewall policy while preserving remote and LAN recovery access.
 - Review Tailscale access policies and device authorization.
 - Define monitoring for link, VPN and SSH availability.
 - Establish operational recovery procedures for loss of remote connectivity.

@@ -38,7 +38,7 @@ flowchart LR
 
 Remote administration uses a private Tailscale address and the same hardened OpenSSH service used for LAN access. No router-level public SSH port forwarding was configured as part of this deployment. SSH authentication remains based on the workstation's Ed25519 key; the private key is not deployed to the server.
 
-See [architecture details](diagrams/architecture.md). The detailed architecture document is being updated to reflect the VPN deployment.
+See [architecture details](diagrams/architecture.md) for the physical underlay, Tailscale overlay, Linux routing and SSH administration paths.
 
 ## Implemented baseline
 
@@ -70,7 +70,7 @@ These checks validate the stated configuration and connectivity; they do not con
 | Tailscale for remote access | Provides private connectivity without configuring inbound SSH port forwarding on the home router |
 | Incremental platform deployment | Establishes a tested host baseline before introducing automation and application workloads |
 
-**Outstanding controls:** firewall policy has not yet been documented as validated; a stable DHCP reservation, backup/restore procedures, monitoring and automated configuration remain to be implemented or verified. Remote access depends on the host, network and Tailscale service being available.
+**Outstanding controls:** the firewall and SSH listening configuration were audited on 2026-11-10, but an explicit default-deny inbound firewall policy has not yet been implemented. Router-side DHCP reservation, backup and recovery procedures, monitoring, and automated configuration remain to be implemented or verified. Remote access depends on the host, network and Tailscale service being available.
 
 ## Delivery roadmap
 
@@ -79,7 +79,8 @@ These checks validate the stated configuration and connectivity; they do not con
 - [x] Apply OS updates and verify post-reboot service health
 - [x] Deploy and validate SSH public-key authentication and hardening
 - [x] Establish and test remote administration over Tailscale
-- [ ] Review firewall rules and administrative network exposure
+- [x] Audit firewall rules, SSH listening sockets and administrative network exposure
+- [ ] Implement and validate an inbound firewall policy preserving Tailscale and trusted LAN access
 - [ ] Configure and verify stable LAN addressing
 - [ ] Automate baseline configuration with Ansible
 - [ ] Define and test backup and recovery procedures
@@ -94,7 +95,7 @@ These checks validate the stated configuration and connectivity; they do not con
 - [SSH administration](docs/03-ssh.md)
 - [Architecture](diagrams/architecture.md)
 
-**Documentation status:** the linked technical notes were written during initial provisioning and are being revised to reflect the validated SSH and Tailscale baseline.
+**Documentation status:** the host provisioning, network configuration, SSH administration and architecture notes have been reviewed against the validated infrastructure baseline as of 2026-11-10. Outstanding security controls and future platform deployments are documented separately.
 
 ## Repository scope
 
