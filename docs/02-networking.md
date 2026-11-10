@@ -1,196 +1,186 @@
-# 02 — Network Configuration
+# Network Architecture & Connectivity
 
-## Objective
+## Scope
 
-Establish reliable local network connectivity between the GMKtec Ubuntu Server and the administration workstation.
+This document describes the networking baseline of `homelab-01`: physical connectivity, DHCP addressing, Netplan/systemd-networkd behavior, network readiness troubleshooting, and private remote administration through Tailscale.
 
-This document describes the initial network configuration and the concepts behind it.
+The deployment uses a single physical Ubuntu Server host connected to a home router. It is **not** a redundant network design.
 
-## 1. Network architecture
+## 1. Topology and traffic paths
 
-```text
-                     Internet
-                        |
-                  Home router
-                        |
-              Local network (LAN)
-                 192.168.1.0/24
-                        |
-            +-----------+-----------+
-            |                       |
-       MacBook Air               GMKtec
-       SSH client                homelab-01
-                                 Ubuntu Server
-                                 192.168.1.12
-                                 enp2s0
+```mermaid
+flowchart LR
+    Remote["MacBook Air\nSSH client + Tailscale"]
+    Tailnet["Tailscale private network"]
+    Server["homelab-01\nUbuntu Server"]
+    Router["Home router\nDHCP / Internet gateway"]
+
+    Remote -->|"SSH / TCP 22 via Tailscale"| Tailnet
+    Tailnet -->|"tailscale0"| Server
+    Router -->|"Ethernet / enp2s0"| Server
 ```
 
-The MacBook Air connects to the home network using Wi-Fi, while the Ubuntu Server uses Ethernet.
+The server is reachable on the local network via its DHCP-assigned address and remotely through its Tailscale address. The SSH service is shared across these paths; the VPN does not replace SSH authentication.
 
-Both devices communicate through the local network.
-
-## 2. Network interfaces
-
-The server contains multiple network interfaces.
-
-| Interface | Role | Initial state |
+| Parameter | Observed value | Notes |
 |---|---|---|
-| `lo` | Loopback | UP |
-| `enp1s0` | Ethernet | DOWN |
-| `enp2s0` | Ethernet | UP |
-| `wlp4s0` | Wi-Fi | DOWN |
+| Hostname | `homelab-01` | Ubuntu Server 26.04.1 LTS |
+| Active wired interface | `enp2s0` | Connected to home router |
+| LAN IPv4 | `192.168.1.12` | DHCP-assigned; subject to lease changes |
+| LAN subnet | `192.168.1.0/24` | Observed local addressing |
+| Tailscale IPv4 | `100.80.166.89` | Private tailnet endpoint |
+| Administration client | MacBook Air | Tailscale peer `100.104.23.26` at validation time |
+| Remote administration | OpenSSH / TCP 22 | Ed25519 public-key authentication |
 
-Inspect the interfaces using:
+These addresses are recorded as an observed baseline, not guaranteed permanent assignments.
 
-```bash
-ip -br addr
-```
+## 2. Interface management
 
-The `-br` option displays a brief summary of the interface addresses and operational states.
+Ubuntu Server uses Netplan with `systemd-networkd` as the network backend. The active physical uplink is `enp2s0`; the second Ethernet interface is not connected.
 
-The active interface is `enp2s0`.
-
-## 3. DHCP configuration
-
-During Ubuntu Server installation, the Ethernet interface was configured using DHCP.
-
-DHCP stands for Dynamic Host Configuration Protocol.
-
-It allows a DHCP server, usually the home router, to assign network parameters automatically.
-
-Typical parameters include:
-
-- IPv4 address
-- Subnet mask
-- Default gateway
-- DNS servers
-- Lease duration
-
-The server received:
-
-```text
-IPv4 address: 192.168.1.12
-Subnet:      192.168.1.0/24
-Interface:   enp2s0
-```
-
-The `/24` prefix corresponds to the subnet mask `255.255.255.0`.
-
-The default gateway and DNS configuration have not yet been independently verified.
-
-## 4. Private IP addressing
-
-The address `192.168.1.12` belongs to the RFC 1918 private IPv4 address space.
-
-Private IP addresses are used within local networks and are not directly routed over the public Internet.
-
-This explains why the following command works from the Mac when both devices are on the same home network:
-
-```bash
-ssh mouhamadou@192.168.1.12
-```
-
-However, the same command will not normally reach the home server from another network.
-
-## 5. Ethernet connectivity
-
-The GMKtec is connected to the home router using a Cat 6 Ethernet cable.
-
-The active Ethernet interface is `enp2s0`.
-
-Ethernet provides a stable wired connection suitable for a server that will remain powered on for extended periods.
-
-## 6. Useful diagnostic commands
-
-Display network interfaces:
+Useful inspection commands:
 
 ```bash
 ip -br addr
-```
-
-Display the routing table:
-
-```bash
 ip route
+networkctl list
+sudo netplan get
 ```
 
-Display DNS configuration:
+The server uses DHCP on `enp2s0`, with an observed LAN address of `192.168.1.12/24` and default gateway `192.168.1.254`. Netplan also configures DHCP on the disconnected `eno1` interface, marked `optional: true`. DNS inspection on 2026-11-10 confirmed the home router (`192.168.1.254`) and an IPv6 resolver on `enp2s0`, while `tailscale0` uses Tailscale DNS (`100.100.100.100` and its IPv6 counterpart) for tailnet-specific resolution. A router-side DHCP reservation has not been verified.
+
+## 3. Incident: network readiness unit failed at boot
+
+### Symptom
+
+Following initial provisioning, `systemd-networkd-wait-online.service` was reported as failed. The active Ethernet interface was functional, but a disconnected secondary interface affected the network readiness check.
+
+### Root cause and remediation
+
+The network readiness check was waiting on a disconnected Ethernet interface (`eno1` in the affected configuration). This interface was not required for the host's primary network path.
+
+The Netplan configuration was adjusted to mark the unused interface as optional:
+
+```yaml
+# Relevant setting only; not a complete copy of the host's Netplan file.
+ethernets:
+  eno1:
+    optional: true
+```
+
+This prevents the unused interface from being treated as a boot-time network readiness dependency. It does not bring the interface up, disable it, or change the active uplink.
+
+**Operational caution:** interface names must be verified on the target host before applying this setting. Earlier inventory notes listed a secondary Ethernet interface as `enp1s0`; the incident configuration referred to `eno1`. The authoritative mapping and full Netplan file should be captured during the next host configuration audit.
+
+### Validation
+
+After applying the configuration and rebooting, the host was reachable and `systemctl --failed` reported zero failed units.
+
+For repeatable checks:
 
 ```bash
-resolvectl status
+sudo netplan get
+systemctl status systemd-networkd-wait-online.service --no-pager
+systemctl --failed
+ip -br addr
 ```
 
-Test connectivity to the local router:
+The observed post-reboot result establishes that the failure was cleared in that test; longer-term boot reliability has not yet been measured.
+
+## 4. Remote access through Tailscale
+
+Tailscale is installed on both the Ubuntu host and the macOS administration workstation. The server-side `tailscaled` service was observed active, and both devices were connected to the same tailnet.
+
+The administrative path was validated from a network outside the home LAN:
 
 ```bash
-ping -c 4 <GATEWAY_IP>
+ssh -i ~/.ssh/id_ed25519_homelab mouhamadou@100.80.166.89
 ```
 
-Test connectivity to an external IP address:
+The Mac also uses a local SSH alias:
 
 ```bash
-ping -c 4 1.1.1.1
+ssh homelab
 ```
 
-Test DNS resolution:
+The alias resolves to the Tailscale address and selects the dedicated client identity. Its macOS configuration includes `IdentitiesOnly yes`, `AddKeysToAgent yes` and `UseKeychain yes`.
+
+**Security boundary:** Tailscale provides private network reachability; OpenSSH independently enforces key-based authentication. Password and keyboard-interactive SSH authentication, as well as direct root login, were disabled and the effective SSH configuration was checked. No public SSH port forwarding was configured on the router as part of this setup.
+
+Tailscale connectivity alone does not establish a complete firewall policy or a review of tailnet ACL/grants. Those remain separate tasks.
+
+### Tailscale policy routing and peer connectivity
+
+Tailscale uses Linux policy routing in addition to the main routing table. During validation, `ip rule show` included a rule selecting routing table `52`, and `ip route show table 52` included a route to the macOS peer (`100.104.23.26`) through `tailscale0`.
+
+The following commands inspect the overlay routing configuration:
 
 ```bash
-getent hosts ubuntu.com
+ip rule show
+ip route show table 52
+tailscale status
+tailscale ping 100.104.23.26
 ```
 
-These commands help distinguish physical connectivity, IP routing and DNS problems.
+A direct peer-to-peer WireGuard connection was observed during testing. This is a point-in-time result, not a guarantee that future connections will remain direct. Tailscale may fall back to DERP relays when direct connectivity is unavailable.
 
-## 7. Planned improvements
+The Tailscale coordination service supports identity and peer discovery; it is not the normal data path for SSH traffic.
+### Firewall and SSH exposure baseline
 
-### Stable LAN addressing
+The firewall and SSH listening configuration were inspected on 2026-11-10.
 
-The server currently receives its IP address through DHCP.
+- UFW was inactive.
+- Tailscale-managed IPv4 and IPv6 filtering rules were present through the `iptables-nft` compatibility layer.
+- The inspected INPUT chains used an `accept` policy; no general default-deny inbound firewall policy was configured.
+- OpenSSH listened on `0.0.0.0:22` and `[::]:22`.
+- SSH socket activation was enabled through `ssh.socket`.
+- Effective SSH settings confirmed public-key authentication enabled, password and keyboard-interactive authentication disabled, and direct root login disabled.
 
-A DHCP reservation on the home router is preferred to keep the address stable while retaining centralized network configuration.
+Listening on all interfaces does not establish public Internet reachability. Router port forwarding, upstream filtering and IPv6 exposure require separate verification.
 
-### Remote access
+**Pending hardening:** design and test an explicit inbound firewall policy that preserves Tailscale administration and a trusted LAN recovery path. No firewall changes were applied during this audit.
+## 5. Operational diagnostics
 
-Remote administration outside the home network will be implemented using a secure VPN solution, such as Tailscale or WireGuard.
+| Check | Command | Purpose |
+|---|---|---|
+| Interface addresses | `ip -br addr` | Verify physical and VPN addresses |
+| Routes | `ip route` | Inspect default and local routes |
+| Resolver | `resolvectl status` | Inspect configured DNS |
+| Networkd | `networkctl status enp2s0` | Check active uplink state |
+| Netplan | `sudo netplan get` | Inspect merged declarative network configuration |
+| Boot failures | `systemctl --failed` | Identify failed units |
+| Tailscale daemon | `systemctl is-active tailscaled` | Confirm service activity |
+| Tailnet peers | `tailscale status` | Inspect peer connectivity |
+| SSH effective policy | `sudo sshd -T` | Verify server authentication settings |
 
-Direct exposure of SSH to the public Internet is not planned.
+For changes affecting the only remote access path, retain a recoverable session or local console access and validate the configuration before rebooting.
+## 6. Validated outcomes and open work
+**Validated**
 
-### Network security
+- Wired LAN connectivity and DHCP assignment on `enp2s0`.
+- Interface inventory and merged Netplan configuration, including `eno1` marked `optional: true`.
+- Default IPv4 route through `192.168.1.254` and DNS configuration on `enp2s0` and `tailscale0`.
+- Initial package mirror connectivity.
+- Local SSH access.
+- Resolution of the network readiness failure after Netplan adjustment and reboot.
+- Active Tailscale service and remote SSH login from outside the home LAN.
+- Tailscale policy routing through Linux table `52`.
+- SSH key-based login and rejection of password-only authentication.
+- Inspection of UFW status, nftables rules, listening sockets and systemd SSH socket activation.
 
-Future tasks include:
+**Pending verification or implementation**
 
-- Configure a firewall
-- Restrict unnecessary inbound connections
-- Configure SSH key authentication
-- Document network services and ports
-- Monitor network availability
+- Verify router-side DHCP reservation and lease persistence.
+- Verify router port forwarding, upstream filtering and public IPv6 exposure.
+- Design and test an explicit inbound firewall policy while preserving remote and LAN recovery access.
+- Review Tailscale access policies and device authorization.
+- Define monitoring for link, VPN and SSH availability.
+- Establish operational recovery procedures for loss of remote connectivity.
 
-## 8. Validation
+## Related documentation
 
-Completed:
+- [Host provisioning](01-installation.md)
+- [SSH administration](03-ssh.md)
+- [Infrastructure architecture](../diagrams/architecture.md)
 
-- [x] Ethernet cable connected
-- [x] Ethernet link active
-- [x] DHCP address assigned
-- [x] Local SSH connection successful
-- [x] Ubuntu package mirror reachable during installation
-
-Pending:
-
-- [ ] Verify default gateway
-- [ ] Verify DNS servers
-- [ ] Configure DHCP reservation
-- [ ] Configure VPN access
-- [ ] Configure firewall rules
-
-## Lessons learned
-
-This milestone introduced:
-
-- LAN and WAN
-- Network interfaces
-- Ethernet connectivity
-- DHCP
-- IPv4 addressing
-- Subnet masks and CIDR notation
-- Private versus public IP addresses
-- Basic network diagnostics
+The linked documents are being updated incrementally to reflect this baseline.

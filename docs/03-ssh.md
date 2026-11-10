@@ -1,270 +1,208 @@
-# 03 — SSH Remote Administration
+# SSH Administration & Access Hardening
 
-## Objective
+## Scope
 
-Enable secure remote administration of the Ubuntu Server from a macOS workstation using SSH.
+This document describes the administrative SSH baseline for `homelab-01`, an Ubuntu Server 26.04.1 LTS host managed from macOS. It covers key-based authentication, server-side OpenSSH policy, client configuration, connectivity over Tailscale, and the checks used to validate the deployment.
 
-This milestone establishes the foundation for managing the homelab without requiring a monitor, keyboard or mouse connected to the server.
+The SSH service runs on the Ubuntu host; Tailscale provides an additional private network path, not a replacement authentication mechanism.
 
-## 1. What is SSH?
+## 1. Access model
 
-SSH stands for Secure Shell.
-
-It is a network protocol that provides encrypted communication between two machines.
-
-In this homelab:
-
-- SSH client: MacBook Air
-- SSH server: GMKtec running Ubuntu Server
-- Hostname: `homelab-01`
-- SSH port: TCP 22
-- Authentication: Password (temporary)
-
-SSH allows the administrator to execute Linux commands remotely.
-
-## 2. Client-server architecture
-
-```text
-MacBook Air
-SSH Client
-     |
-     | Encrypted SSH connection
-     | TCP port 22
-     |
-     v
-GMKtec Mini PC
-Ubuntu Server
-OpenSSH Server
-homelab-01
-192.168.1.12
+```mermaid
+flowchart LR
+    Client["MacBook Air\nOpenSSH client\nEd25519 private key"]
+    VPN["Tailscale private network"]
+    Host["homelab-01\nOpenSSH server\nAuthorized public key"]
+    Client -->|"SSH / TCP 22"| VPN
+    VPN --> Host
 ```
 
-Both machines currently communicate over the same local network.
+| Control | Implemented state |
+|---|---|
+| SSH transport | OpenSSH, TCP 22 |
+| Administrative account | `mouhamadou` |
+| Client authentication | Dedicated Ed25519 key pair |
+| Public key placement | Server account's `~/.ssh/authorized_keys` |
+| Private key placement | macOS workstation only |
+| Password authentication | Disabled |
+| Keyboard-interactive authentication | Disabled |
+| Direct root SSH login | Disabled |
+| Remote connectivity | Tailscale, validated outside the home LAN |
+| macOS client convenience | SSH alias, SSH agent, Keychain integration |
 
-## 3. Install OpenSSH Server
+The private key is passphrase-protected. The key fingerprint displayed by `ssh-add -l` identifies the **client key** and must not be confused with the server's SSH host key fingerprint.
 
-OpenSSH Server was selected during the Ubuntu Server installation.
+## 2. Server-side hardening
 
-Installer options:
+The administrative SSH policy is maintained in a dedicated configuration drop-in:
 
-- Install OpenSSH Server: Enabled
-- Allow password authentication over SSH: Enabled
-- Import SSH identity: Not configured
+```text
+/etc/ssh/sshd_config.d/00-homelab-hardening.conf
+```
 
-Password authentication was enabled to simplify initial access.
+Relevant settings:
 
-It will later be replaced with SSH key-based authentication.
+```sshconfig
+PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin no
+```
 
-## 4. Establish the first connection
+A separate cloud-init drop-in (`50-cloud-init.conf`) contained `PasswordAuthentication yes` during provisioning. OpenSSH configuration processing makes include ordering relevant: the local hardening file was named to precede the cloud-init file, and the **effective** configuration was checked rather than inferred from the file contents alone.
 
-From the macOS Terminal:
+Configuration checks performed on the server:
 
 ```bash
-ssh mouhamadou@192.168.1.12
+sudo sshd -t
+sudo sshd -T
+systemctl is-active ssh
 ```
 
-Command breakdown:
+The syntax check succeeded, the service was active, and effective settings were inspected to confirm the intended authentication policy.
 
-- `ssh`: Launch the SSH client.
-- `mouhamadou`: Remote Linux username.
-- `@`: Separates username and hostname/IP address.
-- `192.168.1.12`: Private IPv4 address of the Ubuntu Server.
+### SSH socket activation and listening addresses
 
-The SSH client connects to TCP port 22 by default.
+The SSH listening configuration was inspected on 2026-11-10.
 
-## 5. First connection: host authenticity
+Ubuntu uses systemd socket activation for SSH on this host. The `ssh.socket` unit is enabled and defines the following listening endpoints:
 
-On the first connection, SSH displayed a message similar to:
-
-```text
-The authenticity of host '192.168.1.12' can't be established.
-Are you sure you want to continue connecting (yes/no/[fingerprint])?
+```ini
+ListenStream=0.0.0.0:22
+ListenStream=[::]:22
+BindIPv6Only=ipv6-only
 ```
 
-This is a normal security mechanism.
+The effective OpenSSH configuration was independently checked with `sudo sshd -T`. It confirmed listening on all IPv4 and IPv6 addresses, with public-key authentication enabled, password authentication disabled, keyboard-interactive authentication disabled, and direct root login disabled.
 
-SSH asks whether the client should trust the server's public host key.
-
-After verifying the server's host key fingerprint through a trusted channel, the administrator can accept it by typing:
-
-```text
-yes
-```
-
-The key is then recorded in the client's `~/.ssh/known_hosts` file.
-
-For this initial setup, the host key was accepted, but an independent fingerprint comparison was not documented.
-
-For future servers, fingerprint verification should be part of the provisioning procedure.
-
-## 6. Initial connection issue
-
-The first SSH connection attempt failed with:
-
-```text
-ssh_dispatch_run_fatal:
-Connection to 192.168.1.12 port 22: Broken pipe
-```
-
-A broken pipe indicates that the SSH connection was interrupted.
-
-The exact cause was not established.
-
-A subsequent connection attempt succeeded without requiring additional server configuration.
-
-Therefore, the incident is recorded as a transient connection failure rather than an identified configuration issue.
-
-## 7. Successful connection
-
-The second connection attempt succeeded.
-
-The terminal displayed:
-
-```text
-mouhamadou@homelab-01:~$
-```
-
-This confirms that the shell is running on the remote Ubuntu Server.
-
-Commands entered at this prompt execute on the GMKtec, not on the MacBook.
-
-## 8. Initial validation commands
-
-### Verify hostname
+Commands used during validation:
 
 ```bash
-hostname
+systemctl is-enabled ssh.socket
+systemctl cat ssh.socket
+sudo sshd -T
+sudo ss -tulpen
 ```
 
-Observed result:
+Because systemd manages the listening sockets, changes to SSH listening addresses must account for `ssh.socket` as well as `sshd_config`.
+
+Listening on all interfaces does not prove public Internet reachability. The host firewall, router configuration and upstream network filtering must be considered separately.
+
+**Change safety:** retain an existing working session and confirm a new public-key login before disabling password-based access or reloading SSH. An out-of-band recovery path should be available for future policy changes.
+
+## 3. Client identity and configuration
+
+The macOS workstation uses a dedicated key:
 
 ```text
-homelab-01
+~/.ssh/id_ed25519_homelab
+~/.ssh/id_ed25519_homelab.pub
 ```
 
-### Verify logged-in user
+The public key is authorized on `homelab-01`; the private key stays on the workstation.
+
+The macOS SSH configuration uses the following host alias:
+
+```sshconfig
+Host homelab
+    HostName 100.80.166.89
+    User mouhamadou
+    IdentityFile ~/.ssh/id_ed25519_homelab
+    IdentitiesOnly yes
+    AddKeysToAgent yes
+    UseKeychain yes
+```
+
+The SSH config file is restricted with `chmod 600 ~/.ssh/config`. The client identity can be registered with the macOS agent and Keychain:
 
 ```bash
-whoami
+ssh-add --apple-use-keychain ~/.ssh/id_ed25519_homelab
+ssh-add -l
 ```
 
-Observed result:
+The agent reported the dedicated Ed25519 identity as loaded, and `ssh homelab` successfully opened a session without another passphrase prompt during the tested session. Persistence after a fresh macOS login has not been separately verified.
 
-```text
-mouhamadou
-```
+## 4. Remote access validation
 
-### Verify network interfaces
+The host is connected to the private Tailscale network and has been reached from outside the home LAN.
+
+Direct connection using the dedicated client identity:
 
 ```bash
-ip -br addr
+ssh -i ~/.ssh/id_ed25519_homelab mouhamadou@100.80.166.89
 ```
 
-The active Ethernet interface was:
-
-```text
-enp2s0  UP  192.168.1.12/24
-```
-
-These checks confirmed that the administrator was connected to the expected machine and that the server had an active network interface.
-
-## 9. Close the SSH session
-
-To end the remote session:
+Equivalent connection through the configured alias:
 
 ```bash
-exit
+ssh homelab
 ```
 
-The terminal displayed:
+Both methods were validated. The resulting shell identified the target as `mouhamadou@homelab-01` running Ubuntu Server 26.04.1 LTS.
+
+Password-only authentication was explicitly tested and rejected with `Permission denied (publickey)`. Public-key login continued to work after the hardening change.
+
+### Host authenticity
+
+On first connection to a previously unknown SSH endpoint, OpenSSH prompts for the server's **host key** fingerprint and stores the accepted key in `known_hosts`.
+
+The recorded first-use prompt for the Tailscale endpoint displayed this Ed25519 host key fingerprint:
 
 ```text
-logout
-Connection to 192.168.1.12 closed.
+SHA256:GLKeqd/+OECgKVyRNGs1ypDjSSATFLdrnvxpg3yfCGY
 ```
 
-The shell returned to the local macOS prompt.
+The fingerprint was accepted during setup; independent out-of-band verification was not documented. For subsequent provisioning, compare the presented fingerprint with a trusted value obtained from the server console before accepting it. A changed host key must be investigated rather than automatically trusted.
 
-Closing an SSH session does not shut down the Ubuntu Server.
+## 5. Troubleshooting record
 
-The server continues running independently.
+### Incorrect execution context
 
-## 10. SSH authentication: current state
+An SSH command was executed from an Ubuntu shell while referencing the private key path that exists on the Mac. The identity file was unavailable and authentication failed with `Permission denied (publickey)`.
 
-Current configuration:
+**Resolution:** distinguish the local macOS prompt from the remote Ubuntu prompt; run client SSH commands from the workstation. Do not copy the private key to the server to work around this error.
 
-- OpenSSH Server installed
-- SSH connection established successfully
-- Password authentication enabled
-- SSH key authentication not yet configured
-- Remote access restricted by current network topology
+### Missing SSH alias
 
-Planned improvements:
+`ssh homelab` initially failed with a hostname resolution error because `~/.ssh/config` did not exist on macOS.
 
-1. Generate an SSH key pair on the MacBook.
-2. Install the public key on the Ubuntu Server.
-3. Verify key-based authentication.
-4. Configure appropriate SSH access restrictions.
-5. Disable password authentication only after confirming key-based access.
-6. Configure the firewall while preserving SSH connectivity.
+**Resolution:** create the SSH config with the `Host homelab` stanza, restrict file permissions, and retest. The alias then connected successfully.
 
-**Important:** Never disable password authentication before verifying that an alternative administrative login method works.
+### Initial transient connection interruption
 
-## 11. Remote access outside the LAN
+An early LAN SSH attempt terminated with `Broken pipe`. The subsequent attempt succeeded without a documented configuration change. The root cause remains undetermined; this event should not be attributed to a specific network or SSH fault without evidence.
 
-The address `192.168.1.12` is private and cannot be used to reach the home server directly across the public Internet.
+## 6. Operational verification
 
-A secure VPN will be introduced later.
+| Verification | Command / method | Result |
+|---|---|---|
+| Server config syntax | `sudo sshd -t` | Passed |
+| Effective SSH policy | `sudo sshd -T` | Intended settings confirmed |
+| SSH service state | `systemctl is-active ssh` | Active |
+| Key-based login | `ssh homelab` from macOS | Successful |
+| Password-only login | Explicit password-only SSH test | Rejected |
+| Remote VPN path | SSH via Tailscale from external network | Successful |
+| Client agent | `ssh-add -l` | Dedicated Ed25519 identity loaded |
 
-Potential solutions:
+| SSH socket activation | `systemctl is-enabled ssh.socket` | Enabled |
+| SSH socket configuration | `systemctl cat ssh.socket` | IPv4 and IPv6 port 22 listeners confirmed |
+| Listening sockets | `sudo ss -tulpen` | SSH listening on all IPv4 and IPv6 interfaces |
+## 7. Security boundaries and outstanding work
 
-- WireGuard
-- Tailscale
+The implemented controls restrict SSH authentication, but do not establish comprehensive host security.
 
-Direct SSH port forwarding from the router to the public Internet is not planned.
+Remaining work includes:
 
-## 12. Security considerations
+- Design and validate an explicit inbound firewall policy for SSH, preserving Tailscale access and a trusted LAN recovery path. The 2026-11-10 audit found UFW inactive, Tailscale-managed nftables rules, and no general default-deny inbound policy.
+- Review Tailscale device authorization and access policies.
+- Establish a documented administrative recovery procedure.
+- Evaluate SSH access logging and alerting.
+- Verify host key fingerprints against a trusted source.
+- Confirm macOS Keychain behavior across fresh login sessions.
+- Introduce repeatable SSH configuration management with Ansible.
 
-Never commit the following to Git:
+## Related documentation
 
-- Private SSH keys
-- Passwords
-- Authentication tokens
-- Credentials
-- Sensitive configuration files
-
-The private key should remain on the administration workstation.
-
-Only the corresponding public key should be installed on the server.
-
-## 13. Validation checklist
-
-- [x] OpenSSH Server installed
-- [x] SSH client available on macOS
-- [x] First host key accepted
-- [x] Remote login successful
-- [x] Hostname verified
-- [x] Username verified
-- [x] Network interface verified
-- [x] Remote session closed successfully
-- [ ] SSH public-key authentication configured
-- [ ] SSH configuration hardened
-- [ ] Firewall configured
-- [ ] VPN access configured
-
-## Lessons learned
-
-This milestone introduced:
-
-- SSH client-server architecture
-- Encrypted remote administration
-- TCP ports
-- Host identity and fingerprints
-- The `known_hosts` file
-- Local versus remote shell sessions
-- Password versus public-key authentication
-- Basic SSH troubleshooting
-
-## Next steps
-
-Configure SSH key authentication and basic server security before introducing remote VPN access and infrastructure automation.
+- [Network architecture and Tailscale](02-networking.md)
+- [Host provisioning](01-installation.md)
+- [Infrastructure architecture](../diagrams/architecture.md)
