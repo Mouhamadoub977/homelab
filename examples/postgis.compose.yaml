@@ -1,0 +1,16 @@
+# Reference only; create a local .env with POSTGRES_PASSWORD (not in Git).
+services:
+  postgis:
+    image: postgis/postgis:17-3.7
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: geodata
+      POSTGRES_DB: geodata
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD_required}
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - postgis_data:/var/lib/postgresql/data
+
+volumes:
+  postgis_data:

@@ -1,0 +1,16 @@
+# Development-only reference, not production deployment.
+services:
+  airflow:
+    image: apache/airflow:3.3.1
+    command: standalone
+    restart: unless-stopped
+    user: "${AIRFLOW_UID:?AIRFLOW_UID_required}:0"
+    environment:
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__PARALLELISM: "2"
+      AIRFLOW_HOME: /opt/airflow
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./data:/opt/airflow
+      - ./dags:/opt/airflow/dags

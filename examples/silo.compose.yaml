@@ -1,0 +1,17 @@
+# Reference only; root credentials are for local bootstrap, not future pipelines.
+services:
+  silo:
+    image: docker.io/pgsty/silo:RELEASE.2026-11-09T00-00-00Z
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ROOT_USER:?S3_ROOT_USER_required}
+      MINIO_ROOT_PASSWORD: ${S3_ROOT_PASSWORD:?S3_ROOT_PASSWORD_required}
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - silo_data:/data
+
+volumes:
+  silo_data:

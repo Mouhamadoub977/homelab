@@ -1,102 +1,60 @@
 # Homelab — Infrastructure & Data Platform Engineering
 
-Self-hosted infrastructure on dedicated hardware, developed as an operational foundation for infrastructure automation, container orchestration, observability and data engineering workloads.
+Self-hosted, single-node data and platform engineering laboratory on a GMKtec M8 running Ubuntu Server 26.04.1 LTS.
 
-The current deployment is a **single-node Ubuntu Server environment**. Its initial baseline covers host provisioning, network readiness, SSH hardening and private remote administration. Subsequent iterations will introduce configuration management and platform services, with deployed capabilities kept distinct from planned work.
+The aim is to learn Linux/Platform Engineering and implement reproducible geospatial pipelines, gradually expanding from Docker Compose to Kubernetes, streaming and a lakehouse.
 
-## Infrastructure at a glance
+> **Status: 2026-11-18.** This repository documents validated terminal sessions and contains reviewed **reference examples**. The live Docker Compose files and Python scripts were created on `homelab-01` and have **not been synchronized automatically** to this repository. The examples may differ from their exact on-host versions.
 
-| Layer | Implementation | State |
+## Current capabilities
+
+| Layer | Implementation | Evidence / status |
 |---|---|---|
-| Compute | GMKtec M8 mini-PC | Deployed |
-| Operating system | Ubuntu Server 26.04.1 LTS | Deployed |
-| Storage | NVMe SSD with LVM | Deployed |
-| LAN | Wired Ethernet (`enp2s0`), DHCP, Netplan/systemd-networkd | Validated |
-| Administration | OpenSSH with Ed25519 public-key authentication | Validated |
-| SSH access policy | Password and keyboard-interactive authentication disabled; direct root login disabled | Validated |
-| Private remote access | Tailscale on Ubuntu Server and macOS | Validated from an external network |
-| Configuration management | Ansible | Planned |
-| Container runtime / orchestration | Docker, Kubernetes (k3s evaluation) | Planned |
-| Observability | Prometheus, Grafana and centralized logs | Planned |
-| Data services | PostgreSQL, MinIO, Airflow and related workloads | Planned |
+| Host | GMKtec M8, Ubuntu Server 26.04.1, NVMe/LVM | Operational |
+| Networking | Netplan Ethernet, hardened SSH keys, Tailscale | Validated remote access |
+| Firewall | UFW rule preparation and recovery plan | **UFW inactive**; activation deferred until local console access |
+| Configuration management | Ansible Core 2.18.7 on Mac, SSH inventory, read-only system audit | **7 ok, 0 changed, 0 failed, 1 skipped** |
+| Container runtime | Docker Engine 29.10.0, Compose v5.8.0 | `hello-world` passed |
+| Spatial database | PostgreSQL 17 / PostGIS 3.7 in Docker | `PostGIS_Version()` and SQL spatial queries passed |
+| S3-compatible object store | PGSTY Silo release 2026-11-09 in Docker | Health HTTP 200; bucket and object write/read validated |
+| Python ETL | Python 3.14 virtualenv, Boto3, Psycopg 3 | S3 GeoJSON → `raw.villes`; two runs, 3 rows |
+| Workflow orchestration | Airflow 3.3.1, standalone in Docker | Web login works; **demo DAG not yet discovered** (`airflow dags list`: `No data found`) |
+| Lakehouse/streaming/orchestration | Spark, Kafka, dbt, Trino, Iceberg, K3s, Helm, GitOps | Planned, not deployed |
+| Cloud / other databases | Oracle, AWS RDS, Snowflake | Integration targets, not installed locally |
 
-**Deployment scope:** one physical server; no high-availability or multi-node guarantees.
-
-## Architecture
+## Validated pipeline
 
 ```mermaid
 flowchart LR
-    Mac["MacBook Air\nSSH client + Tailscale"]
-    TS["Private Tailscale network"]
-    Host["homelab-01\nUbuntu Server 26.04.1 LTS"]
-    Router["Home router / DHCP"]
-
-    Mac -->|"SSH over private VPN"| TS
-    TS --> Host
-    Router -->|"Ethernet / DHCP"| Host
+  A["GeoJSON: 3 cities"] --> B["Silo S3: geodata-raw"]
+  B --> C["Python ETL: Boto3 + Psycopg"]
+  C --> D["PostGIS: raw.villes"]
+  E["Airflow: standalone UI works"] -. "DAG integration pending" .-> C
 ```
 
-Remote administration uses a private Tailscale address and the same hardened OpenSSH service used for LAN access. No router-level public SSH port forwarding was configured as part of this deployment. SSH authentication remains based on the workstation's Ed25519 key; the private key is not deployed to the server.
+- S3 bucket: `geodata-raw`; object key: `villes/villes.geojson` (623 bytes).
+- Spatial data: Paris, Lille and Dakar, EPSG:4326.
+- The Python ETL uses `ON CONFLICT (nom, pays) DO UPDATE`; both observed executions ended with 3 rows, without duplicates.
+- Database exposed only on Ubuntu loopback port 5433; S3 API/console on loopback ports 9000/9001; Airflow Web on loopback port 8080. Browser access uses an SSH tunnel.
+- **Do not confuse persistence with backup:** named Docker volumes are not backups.
 
-See [architecture details](diagrams/architecture.md) for the physical underlay, Tailscale overlay, Linux routing and SSH administration paths.
+## Architecture and runbooks
 
-## Implemented baseline
+- [Architecture and deployed services](diagrams/architecture.md)
+- [Host installation](docs/01-installation.md)
+- [Networking](docs/02-networking.md)
+- [SSH and Tailscale](docs/03-ssh.md)
+- [Ansible audit and sudo compatibility](docs/04-ansible.md)
+- [Docker and PostGIS](docs/05-docker-postgis.md)
+- [S3 storage and Python ETL](docs/06-s3-etl.md)
+- [Airflow deployment and current DAG blocker](docs/07-airflow.md)
+- [Roadmap and operational risks](docs/08-roadmap.md)
+- [Reference examples](examples/README.md) — **review and adapt** before deploying; not auto-synced from the server
 
-### Host and network
+## Operational and security notes
 
-- Installed Ubuntu Server on dedicated hardware using UEFI boot and LVM-backed storage.
-- Configured the wired interface through Netplan with DHCP.
-- Investigated a failed `systemd-networkd-wait-online.service` unit caused by the disconnected secondary Ethernet interface. Marked that interface optional, verified network readiness checks and confirmed no failed systemd units after reboot.
-- Applied operating-system package updates and validated the running kernel after reboot.
-
-### Administrative access
-
-- Generated a dedicated Ed25519 SSH key pair on macOS and installed only the public key on the server.
-- Applied OpenSSH hardening through `/etc/ssh/sshd_config.d/00-homelab-hardening.conf`, ahead of the cloud-init drop-in.
-- Verified effective settings with `sshd -T` and configuration syntax with `sshd -t`.
-- Confirmed successful key-based login and rejection of password-only authentication.
-- Enrolled the server and MacBook in the same Tailscale network; validated SSH access from an external network.
-- Configured a local SSH alias (`ssh homelab`) and macOS Keychain integration for the client identity.
-
-These checks validate the stated configuration and connectivity; they do not constitute a complete security assessment.
-
-## Engineering decisions and constraints
-
-| Decision | Rationale / constraint |
-|---|---|
-| Dedicated physical host | Enables direct control over Linux, networking, storage and host operations |
-| SSH key authentication | Removes password-based remote login while retaining a tested administrative path |
-| Separate OpenSSH drop-in | Keeps local hardening distinct from cloud-init-managed configuration; effective precedence is verified |
-| Tailscale for remote access | Provides private connectivity without configuring inbound SSH port forwarding on the home router |
-| Incremental platform deployment | Establishes a tested host baseline before introducing automation and application workloads |
-
-**Outstanding controls:** the firewall and SSH listening configuration were audited on 2026-11-10, but an explicit default-deny inbound firewall policy has not yet been implemented. Router-side DHCP reservation, backup and recovery procedures, monitoring, and automated configuration remain to be implemented or verified. Remote access depends on the host, network and Tailscale service being available.
-
-## Delivery roadmap
-
-- [x] Provision Ubuntu Server on physical hardware with LVM
-- [x] Validate Ethernet connectivity and resolve network readiness failure
-- [x] Apply OS updates and verify post-reboot service health
-- [x] Deploy and validate SSH public-key authentication and hardening
-- [x] Establish and test remote administration over Tailscale
-- [x] Audit firewall rules, SSH listening sockets and administrative network exposure
-- [ ] Implement and validate an inbound firewall policy preserving Tailscale and trusted LAN access
-- [ ] Configure and verify stable LAN addressing
-- [ ] Automate baseline configuration with Ansible
-- [ ] Define and test backup and recovery procedures
-- [ ] Deploy containerized workloads and evaluate k3s
-- [ ] Introduce metrics, logs and alerting
-- [ ] Deploy data platform services and an end-to-end pipeline
-
-## Documentation
-
-- [Host provisioning and storage](docs/01-installation.md)
-- [Network configuration](docs/02-networking.md)
-- [SSH administration](docs/03-ssh.md)
-- [Architecture](diagrams/architecture.md)
-
-**Documentation status:** the host provisioning, network configuration, SSH administration and architecture notes have been reviewed against the validated infrastructure baseline as of 2026-11-10. Outstanding security controls and future platform deployments are documented separately.
-
-## Repository scope
-
-This repository tracks architecture, selected configuration examples, validation procedures and operational decisions. It is not a backup of the server or a credential store. Configuration examples will be reviewed for sensitive values before publication.
+- Do **not** commit `.env`, credentials, SSH keys, Airflow auth files, database volumes, user data or server backups. See `.gitignore`.
+- An Airflow admin password was exposed in chat during setup; **rotate it before additional use**. The rotation has not been confirmed.
+- Ansible `sudo-rs` elevation on this Ubuntu version timed out; selecting `/usr/bin/sudo.ws` per host in inventory worked.
+- The host has reported a pending reboot/update; schedule it with a tested access/recovery path.
+- All configuration runs are presently on a single physical host with no redundancy.
